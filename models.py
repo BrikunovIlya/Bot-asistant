@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Optional, List
 
 logging.basicConfig(level=logging.INFO)
-PROJECT_ROOT = Path(__file__).parent.parent
+PROJECT_ROOT = Path(__file__).parent
 DB_NAME = PROJECT_ROOT / 'bot_messages.db'
 
 _db: Optional[aiosqlite.Connection] = None
