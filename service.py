@@ -22,7 +22,7 @@ logging.basicConfig(level=logging.INFO)
 CURRENT_DIR = Path(__file__).parent
 PROMPTS_DIR = CURRENT_DIR / "prompts"
 
-prompt_type = (CURRENT_DIR / "prompts" / "prompt_type.md").read_text(encoding="utf-8").strip()
+prompt_type = (PROMPTS_DIR / "prompt_type.md").read_text(encoding="utf-8").strip()
 OLLAMA_HOST = os.getenv('OLLAMA_HOST')
 LLM_MODEL = os.getenv('LLM_MODEL')
 BAN_DURATION = int(os.getenv('BAN_DURATION'))
@@ -38,16 +38,20 @@ _spam_checker: Optional['Spam'] | None = None
 if not PEPPER or len(PEPPER) < 32:
     raise RuntimeError("PEPPER не задан ил еороче 32 символов")
 
+
 @lru_cache(maxsize=10)
 def load_prompt(filename: str) -> str:
     try:
+        if not filename:
+            logging.warning("filename пустой")
+            return "Ты помощник по социальной поддержке"
         prompt_path = PROMPTS_DIR / filename
         if not prompt_path.exists():
             logging.warning(f"Промт {filename} не найден")
             return "Ты помощник по социальной поддержке"
         return prompt_path.read_text(encoding="utf-8").strip()
     except Exception as e:
-        logging.error(f"=== ошибка в чтении промта ====")
+        logging.error(f"=== ошибка в чтении промта -- {e} ====")
         return "вы помощник по социальным выплатам"
 
 
@@ -374,7 +378,7 @@ def normalize_timestamp(ts: float) -> float:
 
 async def define_prompt(message_type: str) -> str:
     try:
-        mt = str(message_type)
+        mt = str(message_type).strip().lower()
         promts_list = {
             "family": "family_prompt.txt",
             "status": "status_prompt.txt",
@@ -387,8 +391,8 @@ async def define_prompt(message_type: str) -> str:
             "svo": "svo_prompt.txt",
             "other": "prompt.txt",
         }
-        filename = promts_list.get(mt)
+        filename = promts_list.get(mt, "prompt.txt")
         return load_prompt(filename)
     except Exception as e:
         logging.error(f"Ошибка в define_prompt -- {e}")
-        return "prompt.txt"
+        return load_prompt("prompt.txt")
