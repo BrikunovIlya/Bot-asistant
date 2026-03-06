@@ -5,7 +5,8 @@ import time
 import sys
 import traceback
 import re
-
+import json
+from datetime import datetime
 from collections import defaultdict
 import aiohttp
 import httpx
@@ -14,13 +15,13 @@ from maxapi import Bot, Dispatcher, F
 from maxapi.enums.sender_action import SenderAction
 from maxapi.types import BotStarted, MessageCreated, MessageChatCreated, DialogCleared, BotRemoved, BotAdded, \
     CallbackButton
-from service import scheduled_clean, Spam, proceed_message_ollama, hash_id, hash_username, init_service, normalize_timestamp, get_spam, request_type
+from service import scheduled_clean, Spam, proceed_message_ollama, hash_id, hash_username, init_service, normalize_timestamp, get_spam, request_type, write_log
 from models import init_db, clean_database, clean_all_messages_from_user, shutdown_db
 import schedule
 from pathlib import Path
 
 
-load_dotenv()
+load_dotenv(override=False, verbose=True)
 MAX_BOT_TOKEN = os.getenv('MAX_BOT_TOKEN')
 mention_name = os.getenv('MENTION_NAME')
 OLLAMA_HOST = os.getenv('OLLAMA_HOST')
@@ -106,7 +107,7 @@ async def bot_added(event: BotAdded):
                  " Пожалуйста, опишите свою ситуацию."
         )
     except Exception as e:
-        logging.error(f"Ошибка добавления боты -- {e}")
+        logging.error(f"Ошибка добавления бота -- {e}")
         await event.bot.send_message(
             chat_id=event.chat_id,
             text="Извините, произошла ошибка, попробуйте позже"
@@ -192,6 +193,11 @@ async def message_handler(event: MessageCreated):
                                                            message_type=message_type)
                 if not answer_text or not answer_text.strip():
                     answer_text = "Извините, не удалось сформировать ответ, попробуйте позже"
+                try:
+                    write_log('logs.jsonl', 'INFO', message=message, user_id=user_id, chat_id=chat_id)
+                except Exception as e:
+                    logging.error(f"ошибка в сохранении логов -- {e}")
+
                 await event.message.answer(answer_text)
             except Exception as e:
                 logging.error(f"Ошибка ответа нейросети в диалоге -- {e}")
@@ -205,11 +211,16 @@ async def message_handler(event: MessageCreated):
                 except Exception as e:
                     logging.error(f"Ошибка в определении типа в чате")
                     return
+
                 answer_text = await proceed_message_ollama(message=message, username=username_hashed,
                                                            user_id=user_id_hashed, chat_id=chat_id,
                                                            message_type=message_type)
                 if not answer_text or not answer_text.strip():
                     answer_text = "Извините, не удалось сформировать ответ, попробуйте позже"
+                try:
+                    write_log('logs.jsonl', 'INFO', message=message, user_id=user_id, chat_id=chat_id)
+                except Exception as e:
+                    logging.error(f"ошибка в сохранении логов -- {e}")
                 await event.message.answer(answer_text)
             except Exception as e:
                 logging.error(f"Ошибка ответа нейросети в чате -- {e}")
