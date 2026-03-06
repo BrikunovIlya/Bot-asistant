@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -14,9 +15,11 @@ from collections import defaultdict
 import hashlib
 import hmac
 
+# Локальные импорты (убедитесь, что они доступны в PYTHONPATH)
 import models
 from models import clean_database
 
+# Загрузка переменных окружения
 load_dotenv()
 
 
@@ -431,6 +434,16 @@ def hash_username(username: str, pepper: str = PEPPER) -> str:
 def normalize_timestamp(ts: float) -> float:
     return ts / 1000 if ts > 1e12 else ts
 
+
+def write_log(filename, level, message, **kwargs):
+    log_entry = {
+        "time": datetime.now().isoformat(),
+        "level": level,
+        "msg": message,
+        **kwargs
+    }
+    with open(filename, 'a', encoding='utf8') as f:
+        f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
 
 
 logging.info(f"✅ PROJECT_ROOT = {PROJECT_ROOT}")
