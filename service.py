@@ -1,61 +1,124 @@
 import asyncio
 import logging
 import os
+import sys
 import time
 from typing import Tuple, Optional
 
 import httpx
-
 from functools import lru_cache
-import models
 from pathlib import Path
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
-from models import clean_database
 from collections import defaultdict
 import hashlib
 import hmac
 
+import models
+from models import clean_database
 
 load_dotenv()
-logging.basicConfig(level=logging.INFO)
-CURRENT_DIR = Path(__file__).parent
-PROMPTS_DIR = CURRENT_DIR / "prompts"
 
-prompt_type = (PROMPTS_DIR / "prompt_type.md").read_text(encoding="utf-8").strip()
+
+
+def get_project_root(marker: str = ".project_root") -> Path:
+    current = Path(__file__).resolve()
+    for parent in [current, *current.parents]:
+        if (parent / marker).exists():
+            return parent
+        if parent == parent.parent:
+            break
+    return Path.cwd()
+
+
+PROJECT_ROOT = get_project_root()
+
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+
+PROMPTS_DIR = PROJECT_ROOT / "max" / "prompts"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)-8s | %(name)s:%(lineno)d | %(message)s",
+)
+
+
+try:
+    prompt_type = (PROMPTS_DIR / "prompt_type.md").read_text(encoding="utf-8").strip()
+except Exception as e:
+    logging.warning(f"Не удалось загрузить prompt_type.md: {e}")
+    prompt_type = "Ты классификатор запросов. Верни только категорию."
+
+
 OLLAMA_HOST = os.getenv('OLLAMA_HOST')
 LLM_MODEL = os.getenv('LLM_MODEL')
-BAN_DURATION = int(os.getenv('BAN_DURATION'))
-SOFT_RATE_LIMIT = int(os.getenv('SOFT_RATE_LIMIT'))
-SOFT_TIME_WINDOW = int(os.getenv('SOFT_TIME_WINDOW'))
-HARD_RATE_LIMIT = int(os.getenv('HARD_RATE_LIMIT'))
-HARD_TIME_WINDOW = int(os.getenv('HARD_TIME_WINDOW'))
 LLM_MODEL_TYPE = os.getenv('LLM_MODEL_TYPE')
 PEPPER = os.getenv('PEPPER')
+
+
+BAN_DURATION = int(os.getenv('BAN_DURATION', 3600))
+SOFT_RATE_LIMIT = int(os.getenv('SOFT_RATE_LIMIT', 10))
+SOFT_TIME_WINDOW = int(os.getenv('SOFT_TIME_WINDOW', 60))
+HARD_RATE_LIMIT = int(os.getenv('HARD_RATE_LIMIT', 50))
+HARD_TIME_WINDOW = int(os.getenv('HARD_TIME_WINDOW', 300))
+
+
 _http_client: httpx.AsyncClient | None = None
-_spam_checker: Optional['Spam'] | None = None
+_spam_checker: Optional['Spam'] = None
+
 
 if not PEPPER or len(PEPPER) < 32:
-    raise RuntimeError("PEPPER не задан ил еороче 32 символов")
+    raise RuntimeError("PEPPER не задан или короче 32 символов")
+
+if not OLLAMA_HOST:
+    logging.warning("OLLAMA_HOST не задан")
 
 
 @lru_cache(maxsize=10)
 def load_prompt(filename: str) -> str:
     try:
         if not filename:
-            logging.warning("filename пустой")
+            logging.warning("filename пустой или None")
             return "Ты помощник по социальной поддержке"
+
         prompt_path = PROMPTS_DIR / filename
         if not prompt_path.exists():
-            logging.warning(f"Промт {filename} не найден")
+            logging.warning(f"Промт {filename} не найден в {PROMPTS_DIR}")
             return "Ты помощник по социальной поддержке"
+
         return prompt_path.read_text(encoding="utf-8").strip()
+
     except Exception as e:
         logging.error(f"=== ошибка в чтении промта -- {e} ====")
         return "вы помощник по социальным выплатам"
 
 
-def init_service(client: httpx.AsyncClient, spam: Optional['Spam'] | None=None):
+async def define_prompt(message_type: str) -> str:
+    try:
+        mt = str(message_type).strip().lower()
+        prompts_map = {
+            "family": "family_prompt.txt",
+            "status": "status_prompt.txt",
+            "employment": "employ_prompt.txt",
+            "social": "social_prompt.txt",
+            "loss": "loss_prompt.txt",
+            "elderly": "elderly_prompt.txt",
+            "health": "health_prompt.txt",
+            "education": "education_prompt.txt",
+            "svo": "svo_prompt.txt",
+            "other": "prompt.txt",
+        }
+        filename = prompts_map.get(mt, "prompt.txt")
+        return load_prompt(filename)
+    except Exception as e:
+        logging.error(f"Ошибка в define_prompt -- {e}")
+        return load_prompt("prompt.txt")
+
+
+def init_service(client: httpx.AsyncClient, spam: Optional['Spam'] = None):
     global _http_client, _spam_checker
     _http_client = client
     if spam is not None:
@@ -87,18 +150,9 @@ async def proceed_message_ollama(message, username, user_id, chat_id, message_ty
         history = []
 
     messages = [
-        {
-            'role': 'system',
-            'content': f'{prompt}'
-        },
-        {
-            "role": "assistant",
-            "content": f"Контекст диалога: {history}"
-        },
-        {
-            'role': 'user',
-            'content': f'{message}'
-        }
+        {'role': 'system', 'content': prompt},
+        {"role": "assistant", "content": f"Контекст диалога: {history}"},
+        {'role': 'user', 'content': message}
     ]
 
     for msg in messages:
@@ -168,14 +222,14 @@ async def request_type(message: str) -> str | None:
     client = _get_client()
 
     if not LLM_MODEL_TYPE:
-        logging.error(" LLM_MODEL_TYPE не задан!")
+        logging.error("LLM_MODEL_TYPE не задан!")
         return None
     if not prompt or len(prompt.strip()) < 10:
-        logging.error(" Промпт пустой!")
+        logging.error("Промпт пустой!")
         return None
 
     messages = [
-        {'role': 'system', 'content': str(prompt).strip()},
+        {'role': 'system', 'content': prompt.strip()},
         {'role': 'user', 'content': str(message).strip()}
     ]
 
@@ -196,10 +250,11 @@ async def request_type(message: str) -> str | None:
 
         response_json = response.json()
         response_type = response_json['message']['content']
-        return response_type
+        return response_type.strip()
 
     except Exception as e:
         logging.error(f"ошибка в определении типа запроса нейросетью -- {e}")
+        return None
 
 
 async def scheduled_clean():
@@ -213,11 +268,11 @@ async def scheduled_clean():
 
             delay = (next_run - now).total_seconds()
             next_run_str = next_run.strftime("%Y-%m-%d %H:%M:%S")
-            logging.info(f"=== Очистка запланирована на {next_run_str} (через {delay/3600:.2f} часов) ===")
+            logging.info(f"=== Очистка запланирована на {next_run_str} (через {delay / 3600:.2f} часов) ===")
             await asyncio.sleep(delay)
             await clean_database()
         except asyncio.CancelledError:
-            logging.info("Задача sheduled_clean отменена")
+            logging.info("Задача scheduled_clean отменена")
             break
         except Exception as e:
             logging.error(f"Ошибка в scheduled_clean: {e}", exc_info=True)
@@ -225,7 +280,6 @@ async def scheduled_clean():
 
 
 class Spam:
-
     def __init__(self):
         self._lock = asyncio.Lock()
         self.banned_users: dict[str, float] = {}
@@ -255,11 +309,13 @@ class Spam:
                 logging.error(f"Ошибка проверки блокировки пользователя {e}")
                 return True, 60
 
-    async def add_ban(self, user_id: str, duration: int = BAN_DURATION):
+    async def add_ban(self, user_id: str, duration: int = None):
+        if duration is None:
+            duration = BAN_DURATION
         try:
             async with self._lock:
                 self.banned_users[user_id] = time.time() + duration
-                logging.warning(f" Пользователь с id  {user_id} ЗАБАНЕН на {duration} сек.")
+                logging.warning(f" Пользователь с id {user_id} ЗАБАНЕН на {duration} сек.")
         except Exception as e:
             logging.error(f"Ошибка в функции add_ban -- {e}")
 
@@ -336,7 +392,7 @@ class Spam:
                 if expired:
                     logging.info(f" Очищено {len(expired)} истёкших банов")
         except Exception as e:
-            logging.error(f"Ошибка в отчистве списка банов -- {e}")
+            logging.error(f"Ошибка в очистке списка банов -- {e}")
 
     async def scheduled_spam_data_clean(self):
         while True:
@@ -376,23 +432,6 @@ def normalize_timestamp(ts: float) -> float:
     return ts / 1000 if ts > 1e12 else ts
 
 
-async def define_prompt(message_type: str) -> str:
-    try:
-        mt = str(message_type).strip().lower()
-        promts_list = {
-            "family": "family_prompt.txt",
-            "status": "status_prompt.txt",
-            "employment": "employ_prompt.txt",
-            "social": "social_prompt.txt",
-            "loss": "loss_prompt.txt",
-            "elderly": "elderly_prompt.txt",
-            "health": "health_prompt.txt",
-            "education": "education_prompt.txt",
-            "svo": "svo_prompt.txt",
-            "other": "prompt.txt",
-        }
-        filename = promts_list.get(mt, "prompt.txt")
-        return load_prompt(filename)
-    except Exception as e:
-        logging.error(f"Ошибка в define_prompt -- {e}")
-        return load_prompt("prompt.txt")
+
+logging.info(f"✅ PROJECT_ROOT = {PROJECT_ROOT}")
+logging.info(f"✅ PROMPTS_DIR = {PROMPTS_DIR}")
