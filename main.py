@@ -79,7 +79,7 @@ async def bot_started(event: BotStarted):
     except Exception as e:
         logging.error(f"Ошибка старта бота -- {e}")
         await event.bot.send_message(
-            chat_id=event.chat_id, text="Извините,произола ошибка, обратитесь позже"
+            chat_id=event.chat_id, text="Извините,произошла ошибка, обратитесь позже"
         )
 
 
