@@ -5,7 +5,7 @@ import os
 import sys
 import time
 from typing import Tuple, Optional
-
+import requests
 import httpx
 from functools import lru_cache
 from pathlib import Path
@@ -41,7 +41,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
-PROMPTS_DIR = PROJECT_ROOT / "max" / "prompts"
+PROMPTS_DIR = PROJECT_ROOT / "prompts"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -446,5 +446,3 @@ def write_log(filename, level, message, **kwargs):
         f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
 
 
-logging.info(f"✅ PROJECT_ROOT = {PROJECT_ROOT}")
-logging.info(f"✅ PROMPTS_DIR = {PROMPTS_DIR}")
