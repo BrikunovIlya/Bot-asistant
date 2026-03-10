@@ -1,2 +1,11 @@
 .env
 .venv
+.idea/
+.vscode/
+logs/
+*.logs
+*.sqlite
+*.sqlite3
+*.db
+db.sqlite3
+*.sql (иногда н
