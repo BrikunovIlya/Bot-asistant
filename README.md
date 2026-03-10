@@ -1,5 +1,6 @@
-# Bot-asistant
-Bot-assistant project made during educational practice by student of the 3rd curse Brikunov Ilya
+## БОТ-ассистент
+
+Бот ассистент для помощи гражданам в поиске информации по социальным льготам.
 
 Запуск проекта 
 python main.py
