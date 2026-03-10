@@ -5,11 +5,12 @@ import os
 import sys
 import time
 from typing import Tuple, Optional
-import requests
+
 import httpx
+import requests
+from dotenv import load_dotenv
 from functools import lru_cache
 from pathlib import Path
-from dotenv import load_dotenv
 from datetime import datetime, timedelta
 from collections import defaultdict
 import hashlib
@@ -19,7 +20,6 @@ import models
 from models import clean_database
 
 load_dotenv()
-
 
 
 def get_project_root(marker: str = ".project_root") -> Path:
@@ -34,10 +34,8 @@ def get_project_root(marker: str = ".project_root") -> Path:
 
 PROJECT_ROOT = get_project_root()
 
-
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-
 
 PROMPTS_DIR = PROJECT_ROOT / "prompts"
 
@@ -46,30 +44,25 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)-8s | %(name)s:%(lineno)d | %(message)s",
 )
 
-
 try:
     prompt_type = (PROMPTS_DIR / "prompt_type.md").read_text(encoding="utf-8").strip()
 except Exception as e:
     logging.warning(f"Не удалось загрузить prompt_type.md: {e}")
     prompt_type = "Ты классификатор запросов. Верни только категорию."
 
+OLLAMA_HOST = os.getenv("OLLAMA_HOST")
+LLM_MODEL = os.getenv("LLM_MODEL")
+LLM_MODEL_TYPE = os.getenv("LLM_MODEL_TYPE")
+PEPPER = os.getenv("PEPPER")
 
-OLLAMA_HOST = os.getenv('OLLAMA_HOST')
-LLM_MODEL = os.getenv('LLM_MODEL')
-LLM_MODEL_TYPE = os.getenv('LLM_MODEL_TYPE')
-PEPPER = os.getenv('PEPPER')
-
-
-BAN_DURATION = int(os.getenv('BAN_DURATION', 3600))
-SOFT_RATE_LIMIT = int(os.getenv('SOFT_RATE_LIMIT', 10))
-SOFT_TIME_WINDOW = int(os.getenv('SOFT_TIME_WINDOW', 60))
-HARD_RATE_LIMIT = int(os.getenv('HARD_RATE_LIMIT', 50))
-HARD_TIME_WINDOW = int(os.getenv('HARD_TIME_WINDOW', 300))
-
+BAN_DURATION = int(os.getenv("BAN_DURATION", 3600))
+SOFT_RATE_LIMIT = int(os.getenv("SOFT_RATE_LIMIT", 10))
+SOFT_TIME_WINDOW = int(os.getenv("SOFT_TIME_WINDOW", 60))
+HARD_RATE_LIMIT = int(os.getenv("HARD_RATE_LIMIT", 50))
+HARD_TIME_WINDOW = int(os.getenv("HARD_TIME_WINDOW", 300))
 
 _http_client: httpx.AsyncClient | None = None
-_spam_checker: Optional['Spam'] = None
-
+_spam_checker: Optional["Spam"] = None
 
 if not PEPPER or len(PEPPER) < 32:
     raise RuntimeError("PEPPER не задан или короче 32 символов")
@@ -119,14 +112,14 @@ async def define_prompt(message_type: str) -> str:
         return load_prompt("prompt.txt")
 
 
-def init_service(client: httpx.AsyncClient, spam: Optional['Spam'] = None):
+def init_service(client: httpx.AsyncClient, spam: Optional["Spam"] = None):
     global _http_client, _spam_checker
     _http_client = client
     if spam is not None:
         _spam_checker = spam
 
 
-def get_spam() -> 'Spam':
+def get_spam() -> "Spam":
     if _spam_checker is None:
         raise RuntimeError("Spam checker не инициализирован")
     return _spam_checker
@@ -138,127 +131,142 @@ def _get_client() -> httpx.AsyncClient:
     return _http_client
 
 
-async def proceed_message_ollama(message, username, user_id, chat_id, message_type):
-    client = _get_client()
+async def proceed_message_ollama(
+    message: str,
+    username: str,
+    user_id: int,
+    chat_id: int,
+    message_type: str,
+) -> str | None:
     prompt = await define_prompt(message_type=message_type)
     history = []
 
-    try:
-        history = await models.prepare_history(username, user_id, chat_id)
-        logging.debug(f"==== История диалога: {history} ====")
-    except Exception as e:
-        logging.warning(f"Ошибка загрузки истории: {e}", exc_info=True)
-        history = []
+    async with httpx.AsyncClient(timeout=120, trust_env=False) as client:
+        try:
+            history = await models.prepare_history(username, user_id, chat_id)
+            logging.debug(f"==== История диалога: {history} ====")
+        except Exception as e:
+            logging.warning(f"Ошибка загрузки истории: {e}", exc_info=True)
+            history = []
 
-    messages = [
-        {'role': 'system', 'content': prompt},
-        {"role": "assistant", "content": f"Контекст диалога: {history}"},
-        {'role': 'user', 'content': message}
-    ]
+        messages = [
+            {"role": "system", "content": prompt},
+            {"role": "assistant", "content": f"Контекст диалога: {history}"},
+            {"role": "user", "content": message},
+        ]
 
-    for msg in messages:
-        if not isinstance(msg, dict) or 'role' not in msg or 'content' not in msg:
-            logging.error(f"Неверный формат сообщения: {msg}")
+        for msg in messages:
+            if not isinstance(msg, dict) or "role" not in msg or "content" not in msg:
+                logging.error(f"Неверный формат сообщения: {msg}")
+                return None
+
+        try:
+            logging.debug(f"Отправка запроса к Ollama: {OLLAMA_HOST}/api/chat")
+
+            response = await client.post(
+                f"{OLLAMA_HOST}/api/chat",
+                json={
+                    "model": LLM_MODEL,
+                    "messages": messages,
+                    "stream": False,
+                    "options": {
+                        "temperature": 0.1,
+                        "repeat_penalty": 1.1,
+                        "num_predict": 3000,
+                    },
+                },
+                timeout=120.0,
+            )
+
+            logging.debug(f"Ответ Ollama: status={response.status_code}")
+
+            if response.status_code != 200:
+                logging.error(
+                    f"Ollama API error: {response.status_code} - {response.text[:500]}"
+                )
+                return None
+
+            response_json = response.json()
+
+            if "message" not in response_json or "content" not in response_json["message"]:
+                logging.error(f"Неверная структура ответа Ollama: {response_json.keys()}")
+                return None
+
+            answer_text = response_json["message"]["content"]
+
+            prepared_message = (
+                f"тип: {message_type} --- {message} / Ответ ассистента: {answer_text}"
+            )
+            save_task = asyncio.create_task(
+                models.save_message(prepared_message, username, user_id, chat_id)
+            )
+            save_task.add_done_callback(
+                lambda t: logging.error(f"Ошибка сохранения: {t.exception()}")
+                if t.exception()
+                else None
+            )
+
+            return answer_text
+
+        except httpx.ConnectError as e:
+            logging.error(f"Не удалось подключиться к Ollama: {e}", exc_info=True)
             return None
-
-    try:
-        logging.debug(f"Отправка запроса к Ollama: {OLLAMA_HOST}/api/chat")
-
-        response = await client.post(
-            f'{OLLAMA_HOST}/api/chat',
-            json={
-                'model': LLM_MODEL,
-                'messages': messages,
-                'stream': False,
-                'options': {
-                    'temperature': 0.1,
-                    'repeat_penalty': 1.1,
-                    'num_predict': 3000,
-                }
-            },
-            timeout=120.0
-        )
-
-        logging.debug(f"Ответ Ollama: status={response.status_code}")
-
-        if response.status_code != 200:
-            logging.error(f"Ollama API error: {response.status_code} - {response.text[:500]}")
+        except httpx.TimeoutException as e:
+            logging.error(f"Таймаут запроса к Ollama: {e}", exc_info=True)
             return None
-
-        response_json = response.json()
-
-        if 'message' not in response_json or 'content' not in response_json['message']:
-            logging.error(f"Неверная структура ответа Ollama: {response_json.keys()}")
+        except httpx.HTTPStatusError as e:
+            logging.error(
+                f"HTTP ошибка Ollama: {e.response.status_code} - {e.response.text[:200]}",
+                exc_info=True,
+            )
             return None
-
-        answer_text = response_json['message']['content']
-
-        prepared_message = f"тип: {message_type} --- {message} / Ответ ассистента: {answer_text}"
-        save_task = asyncio.create_task(
-            models.save_message(prepared_message, username, user_id, chat_id)
-        )
-        save_task.add_done_callback(
-            lambda t: logging.error(f"Ошибка сохранения: {t.exception()}")
-            if t.exception() else None
-        )
-
-        return answer_text
-
-    except httpx.ConnectError as e:
-        logging.error(f"Не удалось подключиться к Ollama: {e}", exc_info=True)
-        return None
-    except httpx.TimeoutException as e:
-        logging.error(f"Таймаут запроса к Ollama: {e}", exc_info=True)
-        return None
-    except httpx.HTTPStatusError as e:
-        logging.error(f"HTTP ошибка Ollama: {e.response.status_code} - {e.response.text[:200]}", exc_info=True)
-        return None
-    except Exception as e:
-        logging.error(f"Непредвиденная ошибка Ollama: {e}", exc_info=True)
-        return None
+        except Exception as e:
+            logging.error(f"Непредвиденная ошибка Ollama: {e}", exc_info=True)
+            return None
 
 
 async def request_type(message: str) -> str | None:
     prompt = prompt_type
-    client = _get_client()
 
-    if not LLM_MODEL_TYPE:
-        logging.error("LLM_MODEL_TYPE не задан!")
-        return None
-    if not prompt or len(prompt.strip()) < 10:
-        logging.error("Промпт пустой!")
-        return None
+    async with httpx.AsyncClient(timeout=120, trust_env=False) as client:
+        if not LLM_MODEL_TYPE:
+            logging.error("LLM_MODEL_TYPE не задан!")
+            return None
+        if not prompt or len(prompt.strip()) < 10:
+            logging.error("Промпт пустой!")
+            return None
 
-    messages = [
-        {'role': 'system', 'content': prompt.strip()},
-        {'role': 'user', 'content': str(message).strip()}
-    ]
+        messages = [
+            {"role": "system", "content": prompt.strip()},
+            {"role": "user", "content": str(message).strip()},
+        ]
 
-    try:
-        response = await client.post(
-            f'{OLLAMA_HOST}/api/chat',
-            json={
-                'model': LLM_MODEL_TYPE,
-                'messages': messages,
-                'stream': False,
-                'options': {
-                    'temperature': 0.1,
-                    'num_predict': 1024,
-                }
-            },
-            timeout=60.0
-        )
+        try:
+            response = await client.post(
+                f"{OLLAMA_HOST}/api/chat",
+                json={
+                    "model": LLM_MODEL_TYPE,
+                    "messages": messages,
+                    "stream": False,
+                    "options": {
+                        "temperature": 0.1,
+                        "num_predict": 1024,
+                    },
+                },
+                timeout=60.0,
+            )
 
-        response_json = response.json()
-        response_type = response_json['message']['content']
-        return response_type.strip()
+            response_json = response.json()
+            response_type = response_json["message"]["content"]
+            return response_type.strip()
 
-    except Exception as e:
-        logging.error(f"ошибка в определении типа запроса нейросетью -- {e}")
-        return None
+        except Exception as e:
+            logging.error(f"ошибка в определении типа запроса нейросетью -- {e}")
+            return None
 
 
 async def scheduled_clean():
+
     while True:
         try:
             now = datetime.now()
@@ -269,9 +277,13 @@ async def scheduled_clean():
 
             delay = (next_run - now).total_seconds()
             next_run_str = next_run.strftime("%Y-%m-%d %H:%M:%S")
-            logging.info(f"=== Очистка запланирована на {next_run_str} (через {delay / 3600:.2f} часов) ===")
+            logging.info(
+                f"=== Очистка запланирована на {next_run_str} "
+                f"(через {delay / 3600:.2f} часов) ==="
+            )
             await asyncio.sleep(delay)
             await clean_database()
+
         except asyncio.CancelledError:
             logging.info("Задача scheduled_clean отменена")
             break
@@ -279,8 +291,8 @@ async def scheduled_clean():
             logging.error(f"Ошибка в scheduled_clean: {e}", exc_info=True)
             await asyncio.sleep(60)
 
-
 class Spam:
+
     def __init__(self):
         self._lock = asyncio.Lock()
         self.banned_users: dict[str, float] = {}
@@ -306,6 +318,7 @@ class Spam:
 
                 seconds_left = int(expires_at - now) + 1
                 return True, max(1, seconds_left)
+
             except Exception as e:
                 logging.error(f"Ошибка проверки блокировки пользователя {e}")
                 return True, 60
@@ -316,7 +329,9 @@ class Spam:
         try:
             async with self._lock:
                 self.banned_users[user_id] = time.time() + duration
-                logging.warning(f" Пользователь с id {user_id} ЗАБАНЕН на {duration} сек.")
+                logging.warning(
+                    f" Пользователь с id {user_id} ЗАБАНЕН на {duration} сек."
+                )
         except Exception as e:
             logging.error(f"Ошибка в функции add_ban -- {e}")
 
@@ -329,31 +344,37 @@ class Spam:
                     expires_at = self.banned_users[user_id]
                     if now < expires_at:
                         seconds_left = int(expires_at - now) + 1
-                        return 'banned', max(1, seconds_left)
+                        return "banned", max(1, seconds_left)
                     else:
                         del self.banned_users[user_id]
 
                 hard_requests = list(self.hard_requests.get(user_id, []))
                 soft_requests = list(self.soft_requests.get(user_id, []))
 
-            hard_requests = self.cleanup_old_timestamps(hard_requests, HARD_TIME_WINDOW)
+            hard_requests = self.cleanup_old_timestamps(
+                hard_requests, HARD_TIME_WINDOW
+            )
             if len(hard_requests) >= HARD_RATE_LIMIT:
                 async with self._lock:
                     self.banned_users[user_id] = now + BAN_DURATION
                     self.hard_requests[user_id] = hard_requests
-                logging.warning(f" Пользователь {user_id} ЗАБАНЕН (hard limit) на {BAN_DURATION} сек.")
-                return 'hard_limit', BAN_DURATION
+                logging.warning(
+                    f" Пользователь {user_id} ЗАБАНЕН (hard limit) на {BAN_DURATION} сек."
+                )
+                return "hard_limit", BAN_DURATION
 
             hard_requests.append(now)
 
-            soft_requests = self.cleanup_old_timestamps(soft_requests, SOFT_TIME_WINDOW)
+            soft_requests = self.cleanup_old_timestamps(
+                soft_requests, SOFT_TIME_WINDOW
+            )
             if len(soft_requests) >= SOFT_RATE_LIMIT:
                 oldest = min(soft_requests)
                 wait_time = int(oldest + SOFT_TIME_WINDOW - now) + 1
                 async with self._lock:
                     self.hard_requests[user_id] = hard_requests
                     self.soft_requests[user_id] = soft_requests
-                return 'soft_limit', max(1, wait_time)
+                return "soft_limit", max(1, wait_time)
 
             soft_requests.append(now)
 
@@ -361,18 +382,22 @@ class Spam:
                 self.hard_requests[user_id] = hard_requests
                 self.soft_requests[user_id] = soft_requests
 
-            return 'ok', 0
+            return "ok", 0
 
         except Exception as e:
-            logging.error(f"Ошибка в проверке лимитов check_rate_limit -- {e}", exc_info=True)
-            return 'ok', 0
+            logging.error(
+                f"Ошибка в проверке лимитов check_rate_limit -- {e}", exc_info=True
+            )
+            return "ok", 0
 
     async def cleanup_expired_bans(self):
         try:
             async with self._lock:
                 now = time.time()
 
-                expired = [uid for uid, expires in self.banned_users.items() if now >= expires]
+                expired = [
+                    uid for uid, expires in self.banned_users.items() if now >= expires
+                ]
                 for uid in expired:
                     del self.banned_users[uid]
 
@@ -392,6 +417,7 @@ class Spam:
 
                 if expired:
                     logging.info(f" Очищено {len(expired)} истёкших банов")
+
         except Exception as e:
             logging.error(f"Ошибка в очистке списка банов -- {e}")
 
@@ -407,7 +433,7 @@ def hash_id(user_id: int, pepper: str = PEPPER) -> str:
         hashed = hmac.new(
             key=pepper.encode(),
             msg=str(user_id).encode(),
-            digestmod=hashlib.sha256
+            digestmod=hashlib.sha256,
         ).hexdigest()
         return hashed[:8]
     except Exception as e:
@@ -420,8 +446,8 @@ def hash_username(username: str, pepper: str = PEPPER) -> str:
         normalized = " ".join(username.strip().lower().split())
         hashed = hmac.new(
             key=pepper.encode(),
-            msg=normalized.encode('utf-8'),
-            digestmod=hashlib.sha256
+            msg=normalized.encode("utf-8"),
+            digestmod=hashlib.sha256,
         ).hexdigest()
         return hashed[:12]
     except Exception as e:
@@ -433,14 +459,12 @@ def normalize_timestamp(ts: float) -> float:
     return ts / 1000 if ts > 1e12 else ts
 
 
-def write_log(filename, level, message, **kwargs):
+def write_log(filename: str, level: str, message: str, **kwargs):
     log_entry = {
         "time": datetime.now().isoformat(),
         "level": level,
         "msg": message,
-        **kwargs
+        **kwargs,
     }
-    with open(filename, 'a', encoding='utf8') as f:
-        f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
-
-
+    with open(filename, "a", encoding="utf8") as f:
+        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
