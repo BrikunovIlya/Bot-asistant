@@ -1,4 +1,4 @@
-FROM python:3.13-slim
+FROM python:3.12-slim
 
 ENV http_proxy http://@proxy.amo.murman.ru:8080
 ENV https_proxy http://@proxy.amo.murman.ru:8080
