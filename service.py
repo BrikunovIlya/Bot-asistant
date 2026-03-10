@@ -15,11 +15,9 @@ from collections import defaultdict
 import hashlib
 import hmac
 
-# Локальные импорты (убедитесь, что они доступны в PYTHONPATH)
 import models
 from models import clean_database
 
-# Загрузка переменных окружения
 load_dotenv()
 
 
