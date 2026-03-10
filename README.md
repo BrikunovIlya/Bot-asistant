@@ -17,6 +17,5 @@ docker build -t max-app .
 docker run --rm \
   --name my-app \
   -p 8000:8000 \
-  -v $(pwd)/.env:/app/.env \
   --env-file .env \
   max-app
