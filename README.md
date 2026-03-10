@@ -14,8 +14,5 @@ python main.py
 Запуск в Docker:
 docker build -t max-app .
 
-docker run --rm \
-  --name my-app \
-  -p 8000:8000 \
-  --env-file .env \
-  max-app
+docker run --rm --env-file .env max-app
+
