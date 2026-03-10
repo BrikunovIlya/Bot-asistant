@@ -11,6 +11,24 @@ from collections import defaultdict
 import aiohttp
 import httpx
 from dotenv import load_dotenv
+proxy = os.getenv('HTTP_PROXY') or os.getenv('HTTPS_PROXY')
+if proxy:
+	os.environ['HTTP_PROXY'] = proxy
+	os.environ['HTTPS_PROXY'] = proxy
+_PATCHED = False
+
+_original_session_init = aiohttp.ClientSession.__init__
+
+def _patched_session_init(self, *args, **kwargs):
+	global _PATCHED
+	if _PATCHED:
+		return _original_session_init(self, *args, **kwargs)
+	_PATCHED = True
+	kwargs['trust_env'] = True
+	return _original_session_init(self, *args, **kwargs)
+
+aiohttp.ClientSession.__init__ = _patched_session_init
+
 from maxapi import Bot, Dispatcher, F
 from maxapi.enums.sender_action import SenderAction
 from maxapi.types import BotStarted, MessageCreated, MessageChatCreated, DialogCleared, BotRemoved, BotAdded, \
@@ -19,6 +37,7 @@ from service import scheduled_clean, Spam, proceed_message_ollama, hash_id, hash
 from models import init_db, clean_database, clean_all_messages_from_user, shutdown_db
 import schedule
 from pathlib import Path
+from maxapi.client.default import DefaultConnectionProperties
 
 
 load_dotenv(override=False, verbose=True)
@@ -27,13 +46,19 @@ mention_name = os.getenv('MENTION_NAME')
 OLLAMA_HOST = os.getenv('OLLAMA_HOST')
 LLM_MODEL = os.getenv('LLM_MODEL')
 logging.basicConfig(level=logging.INFO)
-bot = Bot(MAX_BOT_TOKEN)
 dp = Dispatcher()
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 SOFT_RATE_LIMIT = int(os.getenv('SOFT_RATE_LIMIT'))
 SOFT_TIME_WINDOW = int(os.getenv('SOFT_TIME_WINDOW'))
 MAX_LENGTH = int(os.getenv('MAX_LENGTH'))
+proxy_url = os.getenv('HTTP_PROXY')
 
+connection_props = DefaultConnectionProperties(
+	timeout=120,
+	sock_connect=30
+)
+
+bot = Bot(token=MAX_BOT_TOKEN,default_connection=connection_props,)
 
 @dp.dialog_cleared()
 async def chat_cleared(event: DialogCleared):
@@ -236,12 +261,13 @@ async def main():
     try:
         logging.getLogger('aiohttp').setLevel(logging.DEBUG)
         logging.getLogger('aiohttp.client').setLevel(logging.DEBUG)
+        logging.info(f"испоьзованный прокси {proxy_url}")
         await init_db()
         spam = Spam()
         #await clean_database()  для тестов, потом убрать
         background_tasks = []
 
-        async with httpx.AsyncClient(timeout=80.0, trust_env=False) as http_client:
+        async with httpx.AsyncClient(timeout=80.0, trust_env=False,proxy=proxy_url) as http_client:
             init_service(http_client, spam)
             try:
                 logging.info("=== Бот запущен ===")
