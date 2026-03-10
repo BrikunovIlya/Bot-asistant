@@ -5,7 +5,7 @@
 Запуск проекта 
 python main.py
 
-Python: 
+Python: 3.13-slim
 OC: Windows/Linux
 
 Запуск в Docker
