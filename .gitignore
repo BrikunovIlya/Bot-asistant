@@ -8,4 +8,4 @@ logs/
 *.sqlite3
 *.db
 db.sqlite3
-*.sql (иногда н
+*.sql 
