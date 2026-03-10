@@ -5,10 +5,10 @@
 Python: 3.13-slim
 OC: Windows/Linux
 
-Запуск проекта 
+Запуск проекта:
 python main.py
 
-Запуск в Docker
+Запуск в Docker:
 
 docker build -t max-app .
 
