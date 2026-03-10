@@ -5,6 +5,9 @@
 Запуск проекта 
 python main.py
 
+Python: 
+OC: Windows/Linux
+
 Запуск в Docker
 docker build -t max-app .
 
