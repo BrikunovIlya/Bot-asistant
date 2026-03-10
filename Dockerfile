@@ -10,7 +10,8 @@ ENV NO_PROXY 127.0.0.1, 172/21/0/0, localhost, .local,.gov-murman.ru,.amo-murman
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip
+RUN pip install --no-cache-dir --default-rimeout=20 -r requirements.txt
 
 COPY . .
 
